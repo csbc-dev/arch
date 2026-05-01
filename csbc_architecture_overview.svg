@@ -60,7 +60,7 @@
 <line x1="230" y1="142" x2="250" y2="142" marker-end="url(#arrow)" stroke="#73726c" stroke-width="1.5"/>
 <line x1="402" y1="142" x2="422" y2="142" marker-end="url(#arrow)" stroke="#73726c" stroke-width="1.5"/>
 
-<!-- -- Shell-specific area (below Core, inside Shell) -- -->
+<!-- Shell-specific area (below Core, inside Shell) -->
 
 <!-- Attributes + Lifecycle -->
 <rect x="70" y="185" width="140" height="40" rx="8"
@@ -92,7 +92,7 @@
       In Case C, browser-anchored execution also lives here
 </text>
 
-<!-- -- Side annotations: boundary crossing -- -->
+<!-- Side annotations: boundary crossing -->
 <text x="660" y="120" class="label-anno" fill="#993c1d">
   &lt;- crosses
 </text>
