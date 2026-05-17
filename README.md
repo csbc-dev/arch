@@ -41,7 +41,7 @@ CSBC is the result of optimizing for a specific ordering of quality attributes. 
 Reading the ordering:
 
 1. **Evolvability** — the ability to swap, mix, or migrate frameworks without rewriting business logic is the dominant goal. Every other property is allowed to give way for this.
-2. **Operational portability** — the ability to run the same Core in the browser, in Node/Deno/Workers, or behind a remote proxy is the second-class citizen. It comes after evolvability because some domains are browser-anchored (Case A, Case C) and cannot achieve it; CSBC still applies in those cases.
+2. **Operational portability** — the ability to run the same Core in the browser, in Node/Deno/Workers, or behind a remote proxy is the second priority: important, but subordinate to evolvability. It comes after evolvability because some domains are browser-anchored (Case A, Case C) and cannot achieve it; CSBC still applies in those cases.
 3. **Performance** — latency and throughput matter, but extra indirection layers and remote round trips are accepted when they buy evolvability.
 4. **Initial implementation cost** — the Core/Shell split and the protocol discipline cost more on day one than writing a framework-native component. CSBC explicitly pays this cost to gain the three above.
 
@@ -85,11 +85,11 @@ CSBC structurally resolves this problem by moving the location of async processi
 
 CSBC's architecture consists of three layers:
 
-**Headless Web Component Layer** — Encapsulates async processing (HTTP communication, WebSockets, timers, etc.) internally and autonomously manages state (`value`, `loading`, `error`, `status`, etc.). It has no UI whatsoever and functions as a pure service layer.
+**Headless Web Component Layer** — Encapsulates async processing (HTTP communication, WebSockets, timers, etc.) internally and autonomously manages state (`value`, `loading`, `error`, `status`, etc.). It has no UI whatsoever and functions as a pure service layer. The label refers to the service-facing component boundary; internally this layer is typically split into an `EventTarget` Core and an `HTMLElement` Shell (see [Core/Shell Separation](#coreshell-separation)), so not every class in this layer is itself a Web Component.
 
 **Protocol Layer (wc-bindable-protocol)** — Components declare their bindable properties via a `static wcBindable` field and notify state changes via `CustomEvent`. Adapters simply read this declaration and subscribe to the events.
 
-**Framework Layer** — Connects to the protocol through a thin adapter and renders the received state. Contains absolutely no async processing code.
+**Framework Layer** — Connects to the protocol through a thin adapter and renders the received state. It does not own domain async orchestration such as fetch lifecycles, retry, polling, authorization-sensitive transitions, or loading/error state machines; framework-native concerns (UI event handlers, dynamic imports, animations, route transitions, analytics) remain wherever the framework normally puts them.
 
 ![architecure overview](./csbc_architecture_overview.svg)
 
@@ -357,7 +357,7 @@ The protocol intentionally excludes the following from its scope:
 - Automatic two-way synchronization (the protocol can declare both outputs and inputs, but synchronization is always explicit — never implicit)
 - Form integration
 - SSR / hydration
-- Validation and schema enforcement
+- **Application-level validation and domain schema enforcement.** CSBC does not validate business payloads, form values, authorization policies, or domain-specific command arguments. The protocol does validate its own declaration and wire shapes (`version >= 1`, malformed descriptors rejected at discovery, JSON-only wire format with a 1 MiB envelope cap, etc.) — what is excluded is application-level validation of the data those shapes carry.
 
 The moment the scope is expanded, complexity explodes. These limitations reflect sound design judgment.
 
@@ -475,7 +475,7 @@ The benefits above only earn their weight if alternative approaches were conside
 | Alternative | What it gives up against CSBC's priorities |
 |-------------|---------------------------------------------|
 | **Write business logic natively in the framework** (the default) | Fails evolvability outright — the async re-write at migration time is the very cost CSBC is designed to remove. Wins on initial implementation cost. |
-| **BFF / GraphQL client layer** | Moves data fetching off the framework but leaves lifecycle-bound orchestration (loading, retry, abort, subscription) in framework-specific hooks. Partial improvement on evolvability; no improvement on operational portability of the decision logic. |
+| **BFF / GraphQL client layer** (Apollo, Relay, urql, TanStack Query, etc.) | These tools do abstract cache, loading, retry, and subscription to a meaningful degree, but the integration point is still typically a framework-specific hook, provider, or runtime — the async state machine is not exposed as a framework-neutral `EventTarget`/Core boundary. Partial improvement on evolvability; no improvement on operational portability of the decision logic. |
 | **Framework-agnostic state library (Zustand, Jotai, Nanostores, etc.)** | Decouples state from a single framework's hooks but still binds through per-framework adapters and runs only in the browser. Improves evolvability somewhat; does not deliver runtime portability (Cores running in Node/Deno/Workers) or a remote-able execution model. |
 | **Micro-frontends** | Allows different frameworks to coexist but at the cost of bundle multiplication, cross-bundle communication complexity, and operational overhead. Solves team-scaling lock-in, not async-logic lock-in; loses on operational portability and initial cost. |
 | **Pure Web Components without the Core/Shell split** | Achieves framework decoupling but conflates browser-anchored execution with portable decision logic, foreclosing Case B and Case C. Loses on operational portability. |
