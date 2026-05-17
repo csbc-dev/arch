@@ -1,16 +1,81 @@
 # Avoiding Frontend Framework Lock-in with CSBC and wc-bindable-protocol
 
+> **Upstream tracked**: [wc-bindable-protocol](https://github.com/wc-bindable-protocol/wc-bindable-protocol) **v0.7.1** (protocol `version: 1`) — last synced **2026-05-18**.
+
 ## Overview
 
 CSBC (Core/Shell Bindable Component Architecture) is an architectural concept that splits a component into a headless **Core** that owns decisions and a **Shell** that handles framework integration and any execution the Core cannot delegate away, with state synchronization mediated by a minimal bindable protocol. Built on wc-bindable-protocol as its foundation, it enables reuse across any framework by keeping decisions in the Core regardless of whether the Core runs in the browser, on the server, or in another runtime.
 
 This document summarizes the technical structure of CSBC, its contribution to solving the framework lock-in problem, and its practical operational benefits.
 
+### Who this document is for
+
+This document is aimed at engineering leads and architects evaluating CSBC for production use — typically SaaS teams, internal/enterprise platform teams, or library authors building reusable async components. It assumes a context where framework lifecycles, technology selection changes, or multi-framework coexistence are realistic concerns. For short-lived or single-framework hobby projects, the architecture is likely heavier than the problem warrants; readers in that situation can use this document to confirm that explicitly rather than guess.
+
+## Scope and Non-Goals
+
+CSBC is deliberately narrow. To prevent it from being stretched into roles it was not designed for, the following are explicit non-goals at the architecture level (in addition to the protocol-level scope limitations listed later):
+
+- **Application-wide state management.** CSBC encapsulates per-domain async services (a fetch, a feature-flag stream, an upload session). It does not replace a global store such as Zustand, Pinia, Redux, or Vuex. Cross-component application state should still live in a dedicated layer.
+- **SSR / hydration integration.** CSBC components are designed to run in the browser (or, for the Core, in a non-DOM runtime). They are not a vehicle for server-rendered HTML or hydration matching.
+- **UI component libraries.** CSBC components are headless on purpose. They do not ship visuals, theming, or accessibility primitives. A separate UI layer (framework components, design system, or `data-wcs` adapters) is always required.
+- **Build-tool and bundler integration.** CSBC takes no position on bundlers, monorepo tooling, or framework-specific build pipelines. Each consuming project owns those decisions.
+- **Form input two-way binding.** Inherited from the protocol's scope limitations; CSBC does not introduce an implicit two-way sync layer on top.
+
+If a team needs any of the above, those needs should be met by other mechanisms — not by widening CSBC.
+
 ## Background: The Nature of Framework Lock-in
 
 Framework lock-in in frontend development is often framed as a UI component compatibility problem. However, the true source of migration cost lies in business logic — specifically, asynchronous processing.
 
 `fetch` calls, WebSocket connections, polling, loading state management — these are all written tightly coupled to framework-specific lifecycle APIs: React's `useEffect`, Vue's `onMounted`, Svelte's `onMount`, and so on. When migrating frameworks, rewriting templates can be done mechanically, but re-implementing async logic requires semantic understanding of the code. This is where the real bottleneck lies.
+
+The assumption that framework migration is a real concern is itself worth stating. In practice, lock-in becomes a concrete cost in three recurring situations: (a) a major framework reaches end-of-life or undergoes a discontinuous version jump (Angular 1 → 2, Vue 2 → 3); (b) organizational events — mergers, acquisitions, platform consolidations — force two stacks to coexist or converge; (c) a deliberate technology re-selection driven by hiring, performance, or strategic alignment. CSBC is most valuable for teams that consider any of these scenarios likely on a 5–10 year horizon. Teams for whom none of them apply should weigh the trade-offs in the next section before adopting it.
+
+## Quality Attribute Priorities
+
+CSBC is the result of optimizing for a specific ordering of quality attributes. A different ordering would justify a different architecture. The ordering CSBC commits to is:
+
+**Evolvability (framework substitutability) > Operational portability > Performance > Initial implementation cost**
+
+Reading the ordering:
+
+1. **Evolvability** — the ability to swap, mix, or migrate frameworks without rewriting business logic is the dominant goal. Every other property is allowed to give way for this.
+2. **Operational portability** — the ability to run the same Core in the browser, in Node/Deno/Workers, or behind a remote proxy is the second-class citizen. It comes after evolvability because some domains are browser-anchored (Case A, Case C) and cannot achieve it; CSBC still applies in those cases.
+3. **Performance** — latency and throughput matter, but extra indirection layers and remote round trips are accepted when they buy evolvability.
+4. **Initial implementation cost** — the Core/Shell split and the protocol discipline cost more on day one than writing a framework-native component. CSBC explicitly pays this cost to gain the three above.
+
+### Trade-offs Made Explicit
+
+| Gained | Given up | Where it shows up |
+|--------|----------|-------------------|
+| Framework substitutability | Extra indirection: Core → Shell → adapter → framework | Slight per-event dispatch overhead; more files per feature than a framework-native component |
+| Clean Core/Shell separation | Higher authoring and learning cost than a plain Web Component | Two-class discipline; reviewers must judge which side owns which code |
+| Remote Core (Case B) | WebSocket round trip on initial state | Higher first-paint / first-interaction latency than an in-browser Core |
+| Server-resident Core (Cases B and C) | Cannot ship as a purely static site; persistent-connection-aware ops required | Hosting cost, reconnection strategy, sticky-session or session-affinity design |
+| Headless design (no Shadow DOM) | Cannot be consumed as a UI component | A separate UI layer is always required (acknowledged in "The Headless Insight") |
+| Conformance to a normative protocol | Cost of tracking upstream spec changes | Periodic upstream sync work (the v0.7.1 sync recorded at the top of this document is an instance) |
+
+### When CSBC Is the Wrong Choice
+
+If the priority ordering above does not match the project's reality, CSBC should not be adopted. Concretely:
+
+- **Sub-millisecond latency is the top priority** (e.g., trading or media UIs): Case B's WebSocket-mediated initial state is unacceptable; Case A may still apply, but the indirection cost should be measured first.
+- **The team has firmly committed to a single framework for the application's expected lifetime** and the application is small enough that framework migration is not a credible scenario: native framework code is a more honest match for the actual priorities.
+- **The deployment target cannot host a long-lived server** (pure static hosting only): Cases B and C are off the table; only Case A is available, which removes a large fraction of CSBC's value.
+
+These rejection conditions exist so that adopting CSBC remains a deliberate decision rather than a default.
+
+### Re-evaluation Triggers
+
+The priority ordering and the architecture that follows from it rest on a set of stable platform assumptions. If any of the following changes materially, the architecture should be re-examined rather than patched in place:
+
+- **`EventTarget` / `CustomEvent` ceases to be a stable, universal primitive** across browser and server runtimes — the protocol's zero-dependency story would no longer hold.
+- **Long-lived WebSocket (or equivalent FIFO) transport becomes operationally infeasible** in the dominant deployment targets — Cases B and C would lose their default transport, forcing either a new default or a scope retraction to Case A.
+- **A protocol-level breaking change is forced** that cannot be expressed as a new `protocol` identifier under the existing `version: 1` discipline — the long-lived-version assumption itself would be at risk.
+- **Framework lock-in ceases to be a meaningful cost** — for example, if a single framework consolidates the ecosystem for the long term, or a standard cross-framework component model subsumes the protocol — the top priority of evolvability would no longer justify the Core/Shell split.
+
+Naming these triggers makes the architecture's expiration conditions explicit rather than leaving them implicit in the priority ordering above.
 
 ## CSBC's Architecture
 
@@ -119,6 +184,8 @@ The thin-Shell case is important, but it is not the only canonical shape. In pra
 | B | Core on server + thin Shell | `ai-agent` remote, `feature-flags` | Proxy, command delegation, or observation adapter over the wire |
 | C | Core on server + browser-anchored execution Shell | `s3-uploader`, `passkey-auth`, `stripe-checkout` | Executes the data plane the browser platform refuses to delegate |
 
+> **Operational prerequisites for Cases B and C.** Both cases assume a server runtime capable of holding long-lived connections (Node, Deno, Bun, or equivalent), a client-side reconnection strategy, and a scaling model that accounts for stateful sessions (sticky routing, session migration, or per-connection state replication). Case A runs entirely in the browser; Cases B and C cannot be deployed as a purely static site. The choice between A and B/C is therefore not only an architectural decision but also an operational commitment, paid for in infrastructure and on-call surface. This trade-off is captured in the priority ordering under [Quality Attribute Priorities](#quality-attribute-priorities) — operational portability is intentionally ranked below evolvability.
+
 Case C is not a deviation from CSBC. It is a first-class case for domains where the browser owns an execution surface the server cannot stand in for: direct object upload, WebRTC, WebUSB, WebBluetooth, `File System Access API`, clipboard / drag-and-drop / paste flows, camera / microphone capture, and other user-gesture- or device-anchored capabilities.
 
 ### Case C: Browser-Anchored Execution
@@ -135,6 +202,8 @@ The principle that survives across all three cases is:
 **the Core owns every decision; the Shell owns only execution it cannot delegate.** A "thick" Shell that signs its own URLs or runs its own authorization checks would be a CSBC violation, regardless of byte count. A thick Shell that PUTs bytes to a Core-signed URL is not.
 
 When you build a CSBC component and the Shell starts to grow, ask which side of that line the new code is on. Pumping bytes that cannot leave the browser → Shell. Anything else → Core.
+
+**Recovery contract for browser-anchored data planes.** Because the Shell holds executor state the Core cannot reconstruct on its own, the two sides split recovery responsibilities. The **Shell** is responsible for *abortability*: every in-flight unit of work (an XHR, a worker job, a 3DS redirect) must respond to a `dispose()` or `abort()` signal and clean up its own resources without leaving partial state on the platform side. The **Core** is responsible for *resumability*: it persists a checkpoint per logical operation — for an S3 multipart upload, the upload ID, the set of completed part numbers, and the current signed URLs; for a 3DS flow, the intent ID and the awaited status — so that a new Shell session can request the same checkpoint and continue rather than restart. Signed-URL expiry, partial PUT failures, and control-channel disconnects are all treated as expected events: the Core re-signs and the Shell re-issues from the last acknowledged checkpoint. This contract makes recovery a designed property of each Case C component rather than something every adopter has to invent.
 
 ### A More Accurate Taxonomy
 
@@ -154,6 +223,18 @@ That makes a small matrix more accurate than a single numbered ladder:
 
 This framing keeps the true invariant in view. Runtime portability remains a major advantage, but it is a consequence available to some domains, not the sole definition of CSBC.
 
+### Core Composition and Granularity
+
+**Granularity guideline.** One Core corresponds to one addressable async resource: a single fetch endpoint, one feature-flag stream, one upload session, one auth session. Cores are not page-sized and not call-sized — they are the unit at which a domain owns its async behavior.
+
+**Composition.** Cores are plain `EventTarget`s, so composition between them uses the same primitive their UI consumers do. Three patterns are normative:
+
+- **Observation** — one Core listens to another Core's events directly via `addEventListener`, or via `bind()` if the dependency declares `wcBindable`. This is the default; it preserves the source Core's authority over its own state.
+- **Shell-mediated injection** — a Shell that hosts multiple related Cores wires them together at construction time (for example, an upload Shell that takes an `auth` Core in its constructor and reads the current token). The Shell owns the lifetime of the composition.
+- **Command invocation** — when one Core needs to ask another Core to *do* something (not just observe state), it calls a declared command. This is the rarest pattern; observation is preferred whenever the dependency can be expressed as state.
+
+A Core must never reach for another Core through globals or service locators. Composition is always declared at the construction site so the dependency graph stays auditable — and so a Core's set of dependencies can be reasoned about without scanning runtime behavior.
+
 ### Remote: Core/Shell Separation Over the Network
 
 The Core/Shell separation naturally extends to a network boundary. With `@wc-bindable/remote`, the Core runs on a server while the client holds a proxy `EventTarget` — and `bind()` works identically on both sides.
@@ -168,7 +249,15 @@ Client (Browser)                        Server (Node / Deno / etc.)
 └──────────────────────┘              └──────────────────────┘
 ```
 
-`RemoteShellProxy` subscribes to the Core's declared events, applies per-property getters on the server side, and forwards property-centric `update` messages over the wire. `RemoteCoreProxy` maintains a local cache, dispatches synthetic events, and exposes `set()` / `invoke()` for inputs and commands. Because the proxy is a standard `EventTarget`, every framework adapter works without modification.
+`RemoteShellProxy` subscribes to the Core's declared events, applies per-property getters on the server side, and forwards property-centric `update` messages over the wire. `RemoteCoreProxy` maintains a local cache, dispatches synthetic events, and exposes a small invocation surface for inputs and commands:
+
+- `set(name, value)` — fire-and-forget, at-most-once
+- `setWithAck(name, value)` / `setWithAckOptions(name, value, options?)` — acknowledged assignment returning a `Promise<void>`, with optional `timeoutMs` and `AbortSignal`
+- `invoke(name, ...args)` / `invokeWithOptions(name, args, options?)` — call a declared command and receive its serialized return value
+- `dispose()` — idempotent teardown; subsequent calls reject with `WC_BINDABLE_DISPOSED`
+- `reconnect(transport)` — attach a fresh transport after the previous one closed
+
+Failures reject with a normative `WC_BINDABLE_*` error code registry — `WC_BINDABLE_TIMEOUT`, `WC_BINDABLE_ABORTED`, `WC_BINDABLE_REMOTE_THROW`, `WC_BINDABLE_TERMINAL_FAILURE`, `WC_BINDABLE_PROTOCOL_ERROR`, and so on — so callers can branch on transport-vs-application failures without parsing messages. The wire format is property-centric JSON only (no `NaN` / `Infinity` / cycles / symbols), validated deeply on both ends before serialization, with FIFO ordering and a default 1 MiB per-envelope cap. Because the proxy is a standard `EventTarget`, every framework adapter works without modification.
 
 This means the three boundaries that CSBC crosses — runtime, framework, and now network — are all handled transparently by the same protocol:
 
@@ -179,6 +268,26 @@ This means the three boundaries that CSBC crosses — runtime, framework, and no
 | Network | Remote (WebSocket / custom transport) | Proxy EventTarget + JSON wire protocol |
 
 The transport layer is pluggable — WebSocket is the default, but any FIFO channel (MessagePort, BroadcastChannel, WebTransport, etc.) can be used by implementing the minimal `ClientTransport` / `ServerTransport` interfaces.
+
+#### Fan-out Model
+
+The default deployment model is **one Core instance per consumer connection**: a new transport session instantiates its own Core and tears it down on disconnect, so per-session state isolation is the baseline. **Shared Cores** — a single server-side Core observed by multiple clients (real-time dashboards, collaborative editing, multi-tab parity) — are an explicit opt-in. In that mode the Shell-side proxy fans state out to every subscriber, and the application owns authorization, per-subscriber filtering, and any conflict-resolution semantics. This split keeps the simple case stateless-per-session and concentrates the hard problems in the opt-in path, rather than imposing fan-out machinery on every adopter.
+
+#### Disconnection Semantics
+
+When the transport drops, the proxy behaves predictably so UIs can render a meaningful degraded state instead of guessing:
+
+- **In-flight `setWithAck` and `invoke` calls** reject with `WC_BINDABLE_TERMINAL_FAILURE` (or with `WC_BINDABLE_TIMEOUT` if the configured timeout expires first, or `WC_BINDABLE_PROTOCOL_ERROR` on a protocol violation).
+- **Fire-and-forget `set` calls** issued while disconnected are dropped; the protocol gives no at-least-once guarantee for them.
+- **The local state cache is retained.** It is not invalidated automatically, so the UI can keep rendering the last-known values; whether to mark them as stale is the application's decision.
+- **`loading` and other bindable values do not change on disconnect.** They reflect the Core's state machine, not the transport's. Applications that need to display connection status should subscribe to a separate transport-level signal rather than overload `values.loading`.
+- **`reconnect(transport)` resumes the proxy** with a fresh transport; the Core resubscribes the consumer and re-emits initial values, so the local cache converges to the authoritative state.
+
+This contract surfaces transport failures as application-visible signals rather than hiding them behind transparent retries. Application code that needs at-least-once or retry semantics composes them on top of these primitives explicitly.
+
+#### Authentication and Authorization
+
+Peer authentication, per-input authorization, and rate limiting are explicitly out of CSBC's scope and must be provided by the deployment layer (see SPEC-extensions §Trust Boundary). The protocol carries no identity tokens of its own; the transport's handshake or an application-level envelope is responsible. CSBC therefore does not protect a server-side Core from a misbehaving client on its own — that is the deployment's job.
 
 ### Conversion to a State Machine Subscription
 
@@ -231,7 +340,11 @@ class MyFetch extends HTMLElement {
 }
 ```
 
-Each property descriptor requires only two fields: `name` (property name) and `event` (CustomEvent name). An optional `getter` function can customize how the event payload is extracted. Optionally, `inputs` and `commands` can declare the component's input interface — settable properties and callable methods. These declarations are purely descriptive and do not create automatic two-way synchronization; they exist to enable tooling, documentation generation, and remote proxying of components.
+Each property descriptor requires only two fields: `name` (property name) and `event` (CustomEvent name). An optional `getter` function can customize how the event payload is extracted. Optionally, `inputs` and `commands` can declare the component's input interface — settable properties and callable methods. These declarations are purely descriptive and do not create automatic two-way synchronization; they exist to enable tooling, documentation generation, and remote proxying of components. Within each list (`properties` / `inputs` / `commands`), every `name` must be unique; otherwise the declaration is invalid and discovery returns `undefined`.
+
+The `version: 1` literal is intended to be **long-lived**. The protocol's policy is that any breaking change is signaled by minting a new `protocol` identifier rather than bumping `version`, so conformant observers accept `version >= 1` and components remain forward-compatible across additive evolution of the spec.
+
+The same additive-only discipline applies to **individual component declarations**. Adding a new entry to `properties`, `inputs`, or `commands` is a compatible change for consumers, but renaming or removing a declared `name`, changing an `event` string, or making an existing `input` required are breaking changes that require coordinated migration. Treat a component's `wcBindable` declaration as a public API surface and evolve it under the same compatibility rules as a published library.
 
 ### Zero Dependencies — Web Standards Only
 
@@ -250,29 +363,46 @@ The moment the scope is expanded, complexity explodes. These limitations reflect
 
 ## The Thinness of the Adapter
 
-The core `bind()` function can be implemented in roughly 20 lines:
+The core `bind()` function can be implemented in roughly 30 lines. The spec requires the returned cleanup function (`UnbindFn`) to be **idempotent** and **exception-safe**, and initial sync to use the `in` operator so an explicitly assigned `undefined` is honored rather than skipped:
 
 ```javascript
 const DEFAULT_GETTER = (e) => e.detail;
 
-function bind(target, onUpdate) {
-  const { protocol, version, properties } = target.constructor.wcBindable;
-  if (protocol !== "wc-bindable" || version !== 1) return;
+function bind(target, onUpdate, options = {}) {
+  const decl = target.constructor.wcBindable;
+  if (decl?.protocol !== "wc-bindable" || !(decl.version >= 1)) return () => {};
 
-  for (const prop of properties) {
-    const getter = prop.getter ?? DEFAULT_GETTER;
-    target.addEventListener(prop.event, (event) => {
-      onUpdate(prop.name, getter(event));
-    });
-    const current = target[prop.name];
-    if (current !== undefined) {
-      onUpdate(prop.name, current);
+  const teardowns = [];
+  let disposed = false;
+
+  try {
+    for (const prop of decl.properties) {
+      const getter = prop.getter ?? DEFAULT_GETTER;
+      const listener = (event) => onUpdate(prop.name, getter(event));
+      target.addEventListener(prop.event, listener);
+      teardowns.push(() => target.removeEventListener(prop.event, listener));
+
+      // Initial sync — `in` distinguishes "explicit undefined" from "missing"
+      if (options.syncOn !== "connect" && prop.name in target) {
+        onUpdate(prop.name, target[prop.name]);
+      }
     }
+  } catch (err) {
+    teardowns.forEach((fn) => fn()); // exception-safe: tear down before rethrow
+    throw err;
   }
+
+  return () => {
+    if (disposed) return;            // idempotent
+    disposed = true;
+    teardowns.forEach((fn) => fn());
+  };
 }
 ```
 
-Note that `bind()` accepts any `EventTarget` — it works with both the Shell (`HTMLElement`) via framework adapters and the Core (`EventTarget`) directly.
+Note that `bind()` accepts any `EventTarget` — it works with both the Shell (`HTMLElement`) via framework adapters and the Core (`EventTarget`) directly. The `syncOn: "connect"` option defers initial reads until DOM connection, useful for elements bound before they enter the document.
+
+The spec defines three conformance levels — **Level 1** (protocol: producer 1P / observer 1O), **Level 2** (core JS API with the normatively-named exports `getWcBindableDeclaration` / `isWcBindable` / `bind`), and **Level 3** (remote wire format from SPEC-extensions.md). Adapters typically target Level 2.
 
 Framework-specific adapters are also just a few dozen lines each. React's `useWcBindable`, Vue's `useWcBindable`, and Svelte's `use:wcBindable` are all thin wrappers around this core function.
 
@@ -296,6 +426,38 @@ Most framework lock-in escape strategies ultimately reduce to either "don't use 
 
 There is no need for a full upfront migration of existing applications. Teams can start by writing only new API calls as headless Web Components and gradually move async processing outside the framework. Thanks to the spec's initial value sync behavior, calling `bind()` partway through correctly picks up existing state, so coexistence with legacy code is not a problem.
 
+### Migration Playbook
+
+In practice, incremental adoption works best as **strangle by domain, not by file**. Existing `useEffect` or `onMounted` calls are not rewritten on a schedule. New domain services are written as CSBC components, and old async logic is migrated opportunistically — when its host feature is already being touched for another reason. This keeps the migration off the critical path of any single quarter and avoids the common failure mode of a "CSBC migration project" that has to compete for capacity against feature work and quietly loses.
+
+### Observability
+
+Every Core state transition is a `CustomEvent`. That makes the observability question largely one of *where* to hook in rather than *whether* it is possible:
+
+- **State-transition metrics.** Adapters can emit metrics from the same listener that updates the framework, so one listener covers UI rendering and observability simultaneously without separate instrumentation.
+- **Distributed tracing.** Cases B and C cross a process boundary, so wire envelopes are expected to carry W3C `traceparent` (or an application-equivalent context) on the transport's metadata channel, so server-side spans can be correlated with the originating browser action. The protocol itself does not mandate the field; the deployment is expected to add it.
+- **Error attribution.** The normative `WC_BINDABLE_*` error registry doubles as a stable key set for log aggregation and alerting. `WC_BINDABLE_TERMINAL_FAILURE` and `WC_BINDABLE_PROTOCOL_ERROR` are the high-signal categories worth dashboards.
+
+### Debuggability
+
+The Core/Shell/adapter/framework stack — with an additional wire layer in Cases B and C — could be hard to debug if state changes were opaque. They are not, because every transition fans out as a `CustomEvent`. In practice:
+
+- The browser devtools event-listener panel exposes every Core and Shell transition without instrumentation.
+- The Remote wire format is JSON, so transport frames can be logged or piped through a proxy verbatim.
+- The `data-wcs` adapter renders bound state into the DOM, providing a live inspectable view of what the framework layer is seeing — useful as a sanity check when a binding appears wrong.
+
+The cost the Core/Shell split imposes on day-one authoring is paid back in the debugger: the question "which layer mutated this value?" is answerable from existing browser tooling.
+
+### Organizational Fit
+
+CSBC realigns ownership boundaries from *framework* to *domain*, with concrete implications for teams:
+
+- **Case A** can be owned end-to-end by a frontend team, since the entire component lives in the browser.
+- **Cases B and C** introduce a server-side Core that is naturally owned by the team that owns the underlying domain — backend, platform, or a domain-aligned product team — not by the frontend team that consumes it. The Shell remains a frontend concern; the wire contract becomes the inter-team interface.
+- A dedicated platform team is not required, but is a reasonable choice when bindable-protocol expertise itself becomes a shared asset across many product teams.
+
+The pattern works best in organizations already willing to draw team boundaries around domains rather than around the framework layer. In a strict frontend-vs-backend split, Cases B and C will create cross-team coordination cost that teams should anticipate and plan for rather than discover at deployment time.
+
 ### Virtually Eliminated OSS Dependency Risk
 
 Because the total codebase across all packages is extremely small, the typical OSS dependency risk — "what if the community stops maintaining it?" — is nearly nonexistent. It can be forked, read, fixed, and maintained. At the extreme, running an internal company fork is entirely manageable given the codebase's size.
@@ -305,6 +467,20 @@ Teams do not need to wait for the ecosystem to reach critical mass (an abundance
 ### The Headless Insight
 
 By treating Web Components not as "visible UI parts" but as an "async service layer," the styling problems associated with Shadow DOM — historically one of the biggest barriers to Web Component adoption — are sidestepped entirely. Headless components have no DOM and no styles, so the Shadow DOM boundary simply never becomes an issue.
+
+## Alternatives Considered
+
+The benefits above only earn their weight if alternative approaches were considered and rejected against the same priority ordering. The main alternatives, and why CSBC was preferred:
+
+| Alternative | What it gives up against CSBC's priorities |
+|-------------|---------------------------------------------|
+| **Write business logic natively in the framework** (the default) | Fails evolvability outright — the async re-write at migration time is the very cost CSBC is designed to remove. Wins on initial implementation cost. |
+| **BFF / GraphQL client layer** | Moves data fetching off the framework but leaves lifecycle-bound orchestration (loading, retry, abort, subscription) in framework-specific hooks. Partial improvement on evolvability; no improvement on operational portability of the decision logic. |
+| **Framework-agnostic state library (Zustand, Jotai, Nanostores, etc.)** | Decouples state from a single framework's hooks but still binds through per-framework adapters and runs only in the browser. Improves evolvability somewhat; does not deliver runtime portability (Cores running in Node/Deno/Workers) or a remote-able execution model. |
+| **Micro-frontends** | Allows different frameworks to coexist but at the cost of bundle multiplication, cross-bundle communication complexity, and operational overhead. Solves team-scaling lock-in, not async-logic lock-in; loses on operational portability and initial cost. |
+| **Pure Web Components without the Core/Shell split** | Achieves framework decoupling but conflates browser-anchored execution with portable decision logic, foreclosing Case B and Case C. Loses on operational portability. |
+
+None of these is wrong in isolation; each is the right answer under a different priority ordering. CSBC is the right choice when evolvability ranks first.
 
 ## Conclusion
 
@@ -317,3 +493,6 @@ A zero-dependency protocol design relying solely on Web standards, adapters that
 ## Reference
 
 - wc-bindable-protocol: https://github.com/wc-bindable-protocol/wc-bindable-protocol
+- SPEC.md (core protocol): https://github.com/wc-bindable-protocol/wc-bindable-protocol/blob/main/SPEC.md
+- SPEC-extensions.md (inputs/commands invocation, remote wire format): https://github.com/wc-bindable-protocol/wc-bindable-protocol/blob/main/SPEC-extensions.md
+- CONFORMANCE.md (test vectors): https://github.com/wc-bindable-protocol/wc-bindable-protocol/blob/main/CONFORMANCE.md
