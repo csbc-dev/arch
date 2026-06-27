@@ -1,6 +1,8 @@
 # Avoiding Frontend Framework Lock-in with CSBC and wc-bindable-protocol
 
-> **Upstream tracked**: [wc-bindable-protocol](https://github.com/wc-bindable-protocol/wc-bindable-protocol) **v0.7.1** (protocol `version: 1`) — last synced **2026-05-18**.
+> **Upstream tracked**: [wc-bindable-protocol](https://github.com/wc-bindable-protocol/wc-bindable-protocol) (protocol `version: 1`). This document's prose was last reconciled against the spec on **2026-05-18**.
+>
+> **Honest note on versions.** The reference implementations do not all pin the same `@wc-bindable/core` release. Declared ranges currently span `^0.4.0` (`feature-flags`, `stripe`), `^0.7.0` (`s3-uploader`), and `^0.8.0` (`ai-agent`, `ami-voice`, `auth0`); `lambda` and `webauthn` do not depend on it at all. This spread is disclosed here rather than hidden behind a single version number; converging it is tracked as P0-5 in [ROADMAP.md](./ROADMAP.md).
 
 ## Overview
 
@@ -74,6 +76,10 @@ The priority ordering and the architecture that follows from it rest on a set of
 - **Long-lived WebSocket (or equivalent FIFO) transport becomes operationally infeasible** in the dominant deployment targets — Cases B and C would lose their default transport, forcing either a new default or a scope retraction to Case A.
 - **A protocol-level breaking change is forced** that cannot be expressed as a new `protocol` identifier under the existing `version: 1` discipline — the long-lived-version assumption itself would be at risk.
 - **Framework lock-in ceases to be a meaningful cost** — for example, if a single framework consolidates the ecosystem for the long term, or a standard cross-framework component model subsumes the protocol — the top priority of evolvability would no longer justify the Core/Shell split.
+- **A framework-neutral async-state boundary becomes mainstream.** Data-fetching and state libraries (TanStack Query, Zustand, Jotai, Nanostores, etc.) currently bind through framework-specific hooks. If they begin exposing their state machines over `EventTarget` or a standardized reactive primitive instead, the specific gap CSBC fills — a portable, framework-neutral Core boundary — narrows, and the Core/Shell authoring cost may stop paying for itself.
+- **A reactive-value primitive is standardized** (e.g. the TC39/W3C Signals effort). A standard, framework-neutral representation of reactive state would deliver much of the "subscribe to a state machine" benefit without a bespoke `wcBindable` declaration, weakening the case for the protocol layer specifically.
+- **Server-driven async displaces client-owned async.** If React Server Components, Server Functions, or equivalents push the bulk of fetch/orchestration back across the network by default, the volume of browser-resident async logic that CSBC externalizes shrinks — reducing the size of the problem rather than the quality of the solution.
+- **No independent (non-author) implementation or adopter materializes over a long horizon.** Because part of the evolvability bet is durability, a sustained absence of any second-party implementation is itself a signal that the bet is not being validated in practice (see the single-author limitation noted under [Virtually Eliminated OSS Dependency Risk](#virtually-eliminated-oss-dependency-risk)).
 
 Naming these triggers makes the architecture's expiration conditions explicit rather than leaving them implicit in the priority ordering above.
 
@@ -194,16 +200,22 @@ The familiar thin-Shell rule holds whenever the Core can reach every external sy
 
 There is a different but equally canonical class of work where it cannot. When the **data plane** must run in the browser for reasons unrelated to business logic — direct upload to object storage, WebRTC, WebUSB, the `File System Access API`, anything gated on a user gesture or that would otherwise tunnel a payload through the WebSocket — the Shell stops being a thin marshaller and becomes the **data-plane executor**. The Core retains the **control plane** (signing, authorization, post-processing, persistence) and the wire still carries only small JSON-RPC messages, but the Shell now holds an XHR pump, a worker pool, retry / re-sign logic, and abort plumbing.
 
-`@wc-bindable/s3` is the canonical example: the bytes go browser → S3 directly because tunneling them through the control WebSocket would (a) double the egress cost, (b) waste the server's bandwidth, and (c) defeat S3's parallel multipart upload. The Shell ends up at ~800 lines. That is not a violation of CSBC's intent. It is the correct CSBC shape when the data plane is anchored to the browser by the platform.
+`@wc-bindable/s3` is the canonical example: the bytes go browser → S3 directly because tunneling them through the control WebSocket would (a) double the egress cost, (b) waste the server's bandwidth, and (c) defeat S3's parallel multipart upload. The Shell ends up substantial: the `s3-uploader` Shell is ~1,170 lines (its Core ~1,300) — comparable to, not a fraction of, the Core. "Thin Shell" is a property of the thin-Shell cases, not of Case C; here the Shell carries a real execution engine. That size is not a violation of CSBC's intent. It is the correct CSBC shape when the data plane is anchored to the browser by the platform.
 
 `@wc-bindable/stripe` is the same shape driven by a different constraint: PCI scope. Card data must never touch application code, so Stripe Elements renders the input inside a Stripe-owned iframe and POSTs the PAN directly from browser → Stripe. The Core (server) holds the secret key, builds PaymentIntents / SetupIntents, and verifies webhooks; the Shell loads Stripe.js, mounts the Payment Element, drives `confirmPayment` / `confirmSetup`, and handles the 3DS redirect return. The wire between them carries only intent identifiers, confirmation outcomes, and webhook-driven status — never card data. A Shell that tried to read the card number itself would not just be a CSBC violation; it would pull the entire application into PCI scope.
 
 The principle that survives across all three cases is:
-**the Core owns every decision; the Shell owns only execution it cannot delegate.** A "thick" Shell that signs its own URLs or runs its own authorization checks would be a CSBC violation, regardless of byte count. A thick Shell that PUTs bytes to a Core-signed URL is not.
+**the Core owns every *authority* decision; the Shell owns only execution it cannot delegate — including the local decisions that execution inherently carries.** The line is about *authority*, not about whether the Shell decides anything at all. A "thick" Shell that signs its own URLs, sets its own authorization policy, or decides what the user is allowed to do would be a CSBC violation, regardless of byte count. A thick Shell that PUTs bytes to a Core-signed URL is not — and neither is one that makes the *execution-local* decisions that pumping those bytes requires.
 
-When you build a CSBC component and the Shell starts to grow, ask which side of that line the new code is on. Pumping bytes that cannot leave the browser → Shell. Anything else → Core.
+Be honest about that gray zone, because the flagship Case C Shells live in it. The `s3-uploader` Shell chooses its own PUT retry policy, interprets a 403 as "expired signature → re-sign and retry" versus "genuine denial," and decides when a part URL's remaining TTL is low enough to eagerly re-sign before use. The `stripe` Shell decides which of a racing remote and local error is authoritative. None of these is an *authority* decision — the Core still issues the signatures, owns the authorization, and drives the intent — so none is a violation. The rule is therefore not "the Core makes every decision"; it is "the Core owns every decision about authority, identity, and policy, and the Shell may own the local decisions inherent to executing what the Core authorized."
 
-**Recovery contract for browser-anchored data planes.** Because the Shell holds executor state the Core cannot reconstruct on its own, the two sides split recovery responsibilities. The **Shell** is responsible for *abortability*: every in-flight unit of work (an XHR, a worker job, a 3DS redirect) must respond to a `dispose()` or `abort()` signal and clean up its own resources without leaving partial state on the platform side. The **Core** is responsible for *resumability*: it persists a checkpoint per logical operation — for an S3 multipart upload, the upload ID, the set of completed part numbers, and the current signed URLs; for a 3DS flow, the intent ID and the awaited status — so that a new Shell session can request the same checkpoint and continue rather than restart. Signed-URL expiry, partial PUT failures, and control-channel disconnects are all treated as expected events: the Core re-signs and the Shell re-issues from the last acknowledged checkpoint. This contract makes recovery a designed property of each Case C component rather than something every adopter has to invent.
+When you build a CSBC component and the Shell starts to grow, ask which side of *that* line the new code is on. Authority, identity, policy, signing → Core. Pumping bytes that cannot leave the browser, and the execution-local decisions that pumping requires → Shell.
+
+**Recovery contract for browser-anchored data planes.** Because the Shell holds executor state the Core cannot reconstruct on its own, the two sides split recovery responsibilities — but the two halves of that split do not have the same status, and it is important not to overstate the stronger one.
+
+*Abortability* is a **required invariant** of every Case C component. The **Shell** must make every in-flight unit of work (an XHR, a worker job, a 3DS redirect) respond to a `dispose()` or `abort()` signal and clean up its own resources without leaving partial state on the platform side. Both `s3-uploader` and `stripe` implement this.
+
+*Resumability* is a **domain-dependent option, not a cross-Case C invariant.** Where the control plane can cheaply own a checkpoint, the **Core** persists it and a new Shell session resumes rather than restarts — `stripe` does exactly this: `StripeCore.resumeIntent` rebuilds the active intent from the intent ID and awaited status, with idempotency and an optional resume authorizer. But `s3-uploader` is **explicitly not resumable**: when the WebSocket drops mid-multipart the upload is aborted, and resumable mode is deliberately kept out of the core package (roadmapped to a separate `@csbc-dev/s3-uploader-resumable`). So how far recovery goes beyond abortability is a **per-component design choice**, decided by whether that component's data-plane checkpoint (upload ID + completed parts, intent ID + awaited status, …) is cheap for the Core to own — not a guarantee CSBC makes for every adopter. Signed-URL expiry, partial PUT failures, and control-channel disconnects are still treated as expected events in either design; what differs is whether the component resumes from the last checkpoint or restarts.
 
 ### A More Accurate Taxonomy
 
@@ -406,6 +418,8 @@ The spec defines three conformance levels — **Level 1** (protocol: producer 1P
 
 Framework-specific adapters are also just a few dozen lines each. React's `useWcBindable`, Vue's `useWcBindable`, and Svelte's `use:wcBindable` are all thin wrappers around this core function.
 
+**What is exercised, and what is asserted.** To be honest about the "works with any framework" claim: the React and Vue adapters are backed by runnable example apps in *every* reference package (each ships `react/` and `vue/` example directories, alongside framework-neutral `vanilla` and `@wcstack/state` variants). The Svelte and Solid adapters follow from the same ~30-line `bind()` and appear in snippets, but they are **not yet exercised by a runnable example app** in this repository set. So the cross-framework claim is *proven* for React and Vue and *argued from adapter thinness* for the rest — a distinction worth keeping explicit until a Svelte/Solid example lands.
+
 ## Effectiveness as a Framework Lock-in Escape
 
 ### Commoditization of Frameworks
@@ -460,7 +474,11 @@ The pattern works best in organizations already willing to draw team boundaries 
 
 ### Virtually Eliminated OSS Dependency Risk
 
-Because the total codebase across all packages is extremely small, the typical OSS dependency risk — "what if the community stops maintaining it?" — is nearly nonexistent. It can be forked, read, fixed, and maintained. At the extreme, running an internal company fork is entirely manageable given the codebase's size.
+Because the protocol *kernel* is extremely small — `@wc-bindable/core` is ~325 lines, and a framework adapter is a few dozen (React ~16, Vue ~19) — the typical OSS dependency risk ("what if the community stops maintaining it?") is low for the kernel: it can be forked, read, fixed, and maintained, and an internal company fork is entirely manageable.
+
+This claim should be scoped honestly, though. Cases B and C additionally depend on `@wc-bindable/remote`, which is **not** in the same size class — its `dist` is ~1,500 lines, `RemoteCoreProxy.js` alone ~1,000. The remote layer is still small enough to fork and maintain, but it is an order of magnitude larger than the kernel, so "small enough to read in an afternoon" applies in full only to the kernel and a framework adapter — not to a Case B/C deployment as a whole.
+
+**Known limitation: a single-author origin.** Honesty requires stating the other side of "small enough to fork": today the protocol, the CSBC concept, this document, and all eight reference packages originate from a single author. The fork-and-maintain argument is what makes that *survivable* rather than disqualifying — there is no large community to lose because there is none to begin with — but the network-effect safety of a mainstream framework is genuinely absent here. This is acceptable under the positioning of this work as a **reference-architecture demonstration** rather than a bid for broad third-party adoption; a team considering it for production should weigh the single-maintainer reality explicitly, exactly as it would any small but load-bearing dependency.
 
 Teams do not need to wait for the ecosystem to reach critical mass (an abundance of protocol-compatible components) for the migration motivation to be compelling for their own service. The smallness of the protocol itself dramatically lowers the barrier to adoption.
 
@@ -496,3 +514,18 @@ A zero-dependency protocol design relying solely on Web standards, adapters that
 - SPEC.md (core protocol): https://github.com/wc-bindable-protocol/wc-bindable-protocol/blob/main/SPEC.md
 - SPEC-extensions.md (inputs/commands invocation, remote wire format): https://github.com/wc-bindable-protocol/wc-bindable-protocol/blob/main/SPEC-extensions.md
 - CONFORMANCE.md (test vectors): https://github.com/wc-bindable-protocol/wc-bindable-protocol/blob/main/CONFORMANCE.md
+
+### Reference implementations
+
+The claims in this document are backed by published, runnable reference packages — exhibited here as evidence. This is a *demonstration* of the architecture, not an invitation to depend on a single-author package set (see [Virtually Eliminated OSS Dependency Risk](#virtually-eliminated-oss-dependency-risk)). Repositories live under the `github.com/csbc-dev` organization; versions are early (0.x) and do not all pin the same `@wc-bindable/core` release (see the version note at the top of this document).
+
+| Package | Case | Role of the Shell |
+|---------|------|-------------------|
+| [`@csbc-dev/auth0`](https://www.npmjs.com/package/@csbc-dev/auth0) | A | Thin wrapper around a browser-anchored Core (a remote variant also exists) |
+| [`@csbc-dev/ai-agent`](https://www.npmjs.com/package/@csbc-dev/ai-agent) | B1 | Command-mediating thin Shell over a remote Core |
+| [`@csbc-dev/feature-flags`](https://www.npmjs.com/package/@csbc-dev/feature-flags) | B2 | Observation-only thin Shell over a remote session proxy |
+| [`@csbc-dev/s3-uploader`](https://www.npmjs.com/package/@csbc-dev/s3-uploader) | C | Browser-anchored data-plane executor (direct multipart upload to S3) |
+| [`@csbc-dev/stripe`](https://www.npmjs.com/package/@csbc-dev/stripe) | C | Browser-anchored execution (Stripe Elements + 3DS); Core holds the secret key |
+| [`@csbc-dev/webauthn`](https://www.npmjs.com/package/@csbc-dev/webauthn) | C | Browser-anchored execution (WebAuthn ceremony / passkeys) |
+| [`@csbc-dev/ami-voice`](https://www.npmjs.com/package/@csbc-dev/ami-voice) | C | Browser-anchored mic capture; Core holds the APPKEY and recognition authority |
+| [`@csbc-dev/lambda`](https://www.npmjs.com/package/@csbc-dev/lambda) | — | **Alpha / experimental.** Does not depend on `@wc-bindable/core`; not yet classified into a canonical Case |
