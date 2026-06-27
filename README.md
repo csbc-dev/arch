@@ -56,7 +56,7 @@ Reading the ordering:
 | Remote Core (Case B) | WebSocket round trip on initial state | Higher first-paint / first-interaction latency than an in-browser Core |
 | Server-resident Core (Cases B and C) | Cannot ship as a purely static site; persistent-connection-aware ops required | Hosting cost, reconnection strategy, sticky-session or session-affinity design |
 | Headless design (no Shadow DOM) | Cannot be consumed as a UI component | A separate UI layer is always required (acknowledged in "The Headless Insight") |
-| Conformance to a normative protocol | Cost of tracking upstream spec changes | Periodic upstream sync work (the v0.7.1 sync recorded at the top of this document is an instance) |
+| Conformance to a normative protocol | Cost of tracking upstream spec changes | Periodic upstream sync work (the reconciliation recorded at the top of this document is an instance) |
 
 ### When CSBC Is the Wrong Choice
 
