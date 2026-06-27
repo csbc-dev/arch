@@ -70,8 +70,10 @@ The persuasive power of a reference architecture comes from honest disclosure of
 
 The minimum automation needed to show "the claims are verified." No heavy quality gate required.
 
-- [ ] **P2-1 Integrity CI** — Add a single CI check to the `arch` repo asserting "version stated in the doc == version resolved in each lockfile," to prevent the P0-5 drift from recurring.
-- [ ] **P2-2 Machine-prove conformance** — Run the upstream L1/L2/L3 test vectors in at least one representative package's CI, upgrading "L2 conformant" from prose claim to machine verification.
+> **Status (2026-06-28): P2-1 done and verified; P2-2 partial.** `arch/` is now a checkable hub: `scripts/check-integrity.mjs` (zero-dependency Node) + `package.json` (`npm test`) + `.github/workflows/integrity.yml`. The script was run green against the current tree (14 assertions, 0 skipped) **and** drift-tested negatively (a simulated `^0.7.0 → ^0.9.0` bump that the README did not reflect made it exit 1) — so it is not a vacuous pass. Because `arch/` is documentation-only, the script reaches the eight implementations as sibling repos (`../<name>`); the workflow ships the cross-repo checkouts commented out (their public availability is not assumed) and documents the authoritative run.
+
+- [x] **P2-1 Integrity CI** — `scripts/check-integrity.mjs` asserts that every package's actual `@wc-bindable/core` range (read from its `package.json`) is reflected in the README version note, and that packages with no such dependency are listed as such. Catches the P0-5 drift mechanically. Verified locally + negative-tested.
+- [~] **P2-2 Machine-prove conformance** — **Declaration-level** conformance is verified by the same script (every core-dependent package declares `protocol:"wc-bindable"` + `version:1` in source). **Full L1/L2/L3 wire-vector conformance is deliberately NOT faked**: the upstream `CONFORMANCE.md` vectors are not vendored into this workspace, so machine-proving them is the open follow-up — vendor the vectors (e.g. as `@wc-bindable/conformance`) and run them in at least one package's CI.
 
 ### Out of Scope (excluded by the intent filter) + Reason
 

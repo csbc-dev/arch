@@ -1,0 +1,12 @@
+{
+  "name": "csbc-arch",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "CSBC architecture document and integrity checks (ROADMAP P2).",
+  "scripts": {
+    "test": "node scripts/check-integrity.mjs",
+    "check:integrity": "node scripts/check-integrity.mjs"
+  },
+  "license": "MIT"
+}

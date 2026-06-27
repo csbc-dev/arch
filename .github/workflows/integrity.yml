@@ -1,0 +1,66 @@
+name: integrity
+
+# Verifies that arch/README.md has not drifted away from the reference
+# implementations (ROADMAP P2-1) and that each implementation declares the
+# protocol (declaration-level conformance, P2-2 lite).
+#
+# This check is cross-repo: arch/ is documentation-only, and the eight
+# implementations live in sibling repositories. The script resolves siblings as
+# ../<name> relative to arch/. When they are not present it reports "no siblings
+# found" and exits 0 — it cannot verify what is not checked out. The
+# AUTHORITATIVE run is therefore either:
+#   (a) a local / pre-commit run in a working tree where the siblings already
+#       sit beside arch/ (the layout used during development), or
+#   (b) this job with the sibling checkouts below uncommented.
+# The sibling checkouts are left commented because their repositories' public
+# availability is not assumed here; uncomment (and add a token for any private
+# repo) to turn this into a full cross-repo gate.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out arch
+        uses: actions/checkout@v4
+        with:
+          path: arch
+
+      # --- Uncomment to enable the full cross-repo check ---
+      # - name: Check out ai-agent
+      #   uses: actions/checkout@v4
+      #   with: { repository: csbc-dev/ai-agent, path: ai-agent }
+      # - name: Check out ami-voice
+      #   uses: actions/checkout@v4
+      #   with: { repository: csbc-dev/ami-voice, path: ami-voice }
+      # - name: Check out auth0
+      #   uses: actions/checkout@v4
+      #   with: { repository: csbc-dev/auth0, path: auth0 }
+      # - name: Check out feature-flags
+      #   uses: actions/checkout@v4
+      #   with: { repository: csbc-dev/feature-flags, path: feature-flags }
+      # - name: Check out lambda
+      #   uses: actions/checkout@v4
+      #   with: { repository: csbc-dev/lambda, path: lambda }
+      # - name: Check out s3-uploader
+      #   uses: actions/checkout@v4
+      #   with: { repository: csbc-dev/s3-uploader, path: s3-uploader }
+      # - name: Check out stripe
+      #   uses: actions/checkout@v4
+      #   with: { repository: csbc-dev/stripe, path: stripe }
+      # - name: Check out webauthn
+      #   uses: actions/checkout@v4
+      #   with: { repository: csbc-dev/webauthn, path: webauthn }
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run integrity check
+        working-directory: arch
+        run: node scripts/check-integrity.mjs
