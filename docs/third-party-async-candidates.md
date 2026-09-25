@@ -1,6 +1,6 @@
 # サードパーティ非同期処理 — 次期リファレンス実装の候補分析
 
-> 作成: 2026-07-08 · 追記: 2026-09-25(#25 TypeSafe AI Jev)· 対象: `csbc-dev` 配下の8リファレンス実装と [`../README.md`](../README.md)
+> 作成: 2026-07-08 · 追記: 2026-09-25(#25 TypeSafe AI Jev)、2026-09-26(#26 JMAP)· 対象: `csbc-dev` 配下の8リファレンス実装と [`../README.md`](../README.md)
 > 選定基準: [`../ROADMAP.md`](../ROADMAP.md) §0 の意図フィルタに従い、「採用獲得」ではなく
 > **「文書の主張を反証不能な実証に変えるか」**(completeness × persuasiveness × honesty)で評価する。
 
@@ -34,7 +34,7 @@
 
 ---
 
-## 2. 候補一覧(25件)
+## 2. 候補一覧(26件)
 
 ### Case C 候補(ブラウザ固定実行 — 「秘密はサーバ、実行はブラウザ」の緊張が鮮明なもの)
 
@@ -80,6 +80,7 @@
 | 22 | **OPFS/IndexedDBオフラインキュー+同期** | サードパーティ性が弱い(除外寄り) |
 | 23 | **SharedWorker/MessagePortホストCore** | 「プラガブルトランスポート」主張の実証。`feature-flags` ドメイン流用で新サービス不要 |
 | 24 | **Core合成ショーケース**(`auth0` Core → `s3-uploader` Shellへ注入) | Core Composition の3パターンを動く形に。**新サービス不要で最安** |
+| 26 | **JMAP メール同期**(RFC 8620 / 8621。Fastmail / Stalwart) | 1アカウントの上流セッション(資格情報・push・型ごとの state 文字列・バッチ要求)を、メールボックス一覧・クエリ窓・送信ジョブという複数リソースが共有する。複数 Core の合成(Observation + Command invocation)がドメインから強制される。タグの形は B1+B2 で、Case C にはならない |
 
 ---
 
@@ -97,6 +98,14 @@
 5. **長時間ジョブ+進捗(#13)** — B1の2例目。`ai-agent`(ストリーミング対話)と異なる「Webhook駆動の非対話ジョブ」の状態機械を示せる。
 6. **Core合成ショーケース(#24)+ SharedWorkerトランスポート(#23)** — 新サービス不要で、prose-only の Core Composition とトランスポート差し替え可能性の主張を閉じる。実装というより「構成の実証」。
 7. **TTS(#4)** — `ami-voice` との対称性で音声ドメインが完結。
+8. **JMAP(#26)** — #24 の後に。#24 が示すのは Shell-mediated injection(README の例そのもの)で、残る Observation と Command invocation の2パターンは #24 では埋まらない。JMAP はこの2つを、人工的な組み合わせではなくドメインの必然として示す。実測では8パッケージとも `src/core/` の Core は1つで、複数 Core を合成した実物はまだない。ただしコストは中〜大で、メールクライアント化を避ける線引きが前提になる。
+   - **閉じるもの**: リソース Core がセッション Core の型ごとの state 文字列を観測し(Observation)、変化したら差分取得(`Mailbox/changes`・`Email/queryChanges`)をセッション Core のバッチ実行コマンドに依頼する(Command invocation)。状態機械も厚い。セッション発見 → push 接続 → 差分同期 → `cannotCalculateChanges` なら全再取得、`ifInState` の衝突(`stateMismatch`)なら再同期、と分岐が多く、#15・#16・#25 を退けた「状態機械が薄い」は当てはまらない。
+   - **閉じないもの**: Case C。JMAP には署名付きアップロード URL がなく、`uploadUrl` は資格情報付きの POST を要求する(RFC 8620 §6.1)。添付を browser → JMAP サーバへ直送するにはトークンをブラウザに渡すしかなく、秘密規律と衝突する。再開可能アップロード(#1)も閉じない。state 文字列による resume / restart は README の回復契約の分類を B のコントロールプレーン側から裏付けるだけで、Case C の空白は埋めない。Fan-out についても、同一ユーザーの複数タブ・複数タグで上流 push を1本にまとめる動機にはなるが、`feature-flags` のプロバイダ層集約(上流1本 → per-identity バケット)と同じ形で解けるので shared Core を強制しない。Fan-out の実証なら #17 の方が安い。
+   - **README の未記述点を露出させる**(作らなくても記録する価値がある): (a) 粒度指針「1 Core = 1つのアドレス可能な非同期リソース」は、複数リソースが1つの上流セッション(資格情報・push 接続・バッチ要求)を共有する場合の置き場を語っていない。(b) 「Command invocation は最も稀」は JMAP では逆転し、リソース Core の取得がすべてセッション Core へのコマンド呼出になる。(c) リモート配線は1接続=1プロキシで、複数 Core はファサード `EventTarget` で束ねる必要がある。この制約は `auth0/src/server/createAuthenticatedWSS.ts` のコメントにしか書かれておらず、README の Core Composition 節にはない。
+   - **スコープ外にするもの**: 本文・HTML・添付(1 MiB のエンベロープ上限、サニタイズ、上記の Case C 不成立)。Email / Thread のエンティティキャッシュ共有(アプリ全体の状態管理で、README の明示的非目標)。Case A 版も外す。Fastmail の JMAP API は CORS 対応だが、OAuth クライアントの登録は手動で、ブラウザの `EventSource` / `WebSocket` には `Authorization` ヘッダを付けられない。push を受けるには fetch ストリームで SSE を自前パースするしかなく、物語も `auth0` と重なる。
+   - **作る場合の形**: サーバ Core。API トークンは全権に近い長寿命の資格情報なのでサーバから出さない。接続ごとにセッション Core とリソース Core 1つをファサードで束ね、上流 push はユーザー単位の共有ハブに集約する。タグは次の3つ。`<jmap-mailboxes>`(B2)は `mailboxes`(name / role / unreadEmails / totalEmails のみ)を持ち、push を受けたら `Mailbox/changes` の `updatedProperties` でカウンタだけの差分に絞る。`<jmap-email-query>`(B1)は inputs が mailbox / sort / position / limit で、filter は Core の許可リスト内だけ。`Email/query` と `Email/get` を後方参照で1往復にまとめ、`items` は要約プロパティのみ返す。`setKeywords` / `move` は `ifInState` 付き。`<jmap-submission>`(B1)は `send` / `cancel` を持ち、`undoStatus` / `deliveryStatus` を push で追う。Identity と envelope は Core が固定し、From をブラウザに選ばせない(authority の語りはここが最も鮮明)。`forbiddenFrom` / `forbiddenToSend` / `tooManyRecipients` はエラーコードへ写像する。ベンダー SDK は使わず fetch と自前の SSE パースで書く(`ai-agent` と同方針)。統合テストは Stalwart(OSS。EventSource / WebSocket / PushSubscription / OAuth に対応)をコンテナで立てれば、読者も手元で動かせる。
+   - **#3 との接点**: RFC 8620 §7.2 の PushSubscription と RFC 9749(VAPID)を使うと、JMAP サーバがブラウザの push サービスへ StateChange を直接送れる。Shell が購読(Service Worker・通知許可・鍵)を、Core が登録と `verificationCode` の受け渡しを持つ構図になり、#3 を作るときの第2ドメインとして有力。
+   - **再評価トリガ**: #24 の完了後も Observation / Command invocation が未展示のまま残っているとき。または README の Core Composition 節に (a)〜(c) を書き足すことになり、その裏付けが要るとき。
 
 ### P3 — 価値はあるが重複・地域制約・ハード依存
 
