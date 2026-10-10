@@ -38,7 +38,7 @@ A meaningful run requires the sibling repos to be checked out next to `arch/`. I
   - the README version note
   - the commented checkout list in `integrity.yml`
 
-  New implementations should start on `@wc-bindable/core ^0.8.0`, so the version spread does not grow (candidates doc §4).
+  New implementations should start on `@wc-bindable/core ^0.10.0`, the range every existing implementation converged on, so a version spread does not reappear (candidates doc §4).
 
 ## Editing rules for the documents
 
@@ -47,7 +47,6 @@ These come from ROADMAP §0 and apply to every change.
 - **Positioning:** CSBC is a *reference-architecture showcase*, not a bid for adoption. The value function is `completeness × persuasiveness × intellectual honesty`. The main risk being managed is a README claim that can be **falsified by reading the code it describes**.
 - **Verify before claiming.** Before you write or change any statement about an implementation (Case classification, Shell behavior, line counts, dependency versions, resumability), check it against the sibling repo's actual code. Use measured numbers, not estimates. For example, the Case C Shell size is stated as a measured value, not as "~800 lines".
 - **Prefer honest disclosure to hiding or overclaiming.** Several gaps are disclosed deliberately rather than fixed:
-  - the three-generation `@wc-bindable/core` spread
   - the single-author bus factor
   - Svelte/Solid being argued from adapter thinness rather than shown with runnable examples
   - the missing conformance vectors

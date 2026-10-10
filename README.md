@@ -2,7 +2,7 @@
 
 > **Upstream tracked**: [wc-bindable-protocol](https://github.com/wc-bindable-protocol/wc-bindable-protocol) (protocol `version: 1`). This document's prose was last reconciled against the spec on **2026-05-18**.
 >
-> **Honest note on versions.** The reference implementations do not all pin the same `@wc-bindable/core` release. Declared ranges currently span `^0.4.0` (`feature-flags`, `stripe`), `^0.7.0` (`s3-uploader`), and `^0.8.0` (`ai-agent`, `ami-voice`, `auth0`); `lambda` and `webauthn` do not depend on it at all. This spread is disclosed here rather than hidden behind a single version number; converging it is tracked as P0-5 in [ROADMAP.md](./ROADMAP.md).
+> **Honest note on versions.** Every reference implementation that depends on `@wc-bindable/core` now declares the same range, `^0.10.0` (`ai-agent`, `ami-voice`, `auth0`, `feature-flags`, `s3-uploader`, `stripe`); `lambda` and `webauthn` do not depend on it at all. Until 2026-10 the declared ranges spanned three generations (`^0.4.0`, `^0.7.0`, `^0.8.0`); the convergence closes P0-5 in [ROADMAP.md](./ROADMAP.md). It reaches npm with each package's next release, so a version already published there may still declare an older range.
 
 ## Overview
 
@@ -269,7 +269,7 @@ Client (Browser)                        Server (Node / Deno / etc.)
 - `dispose()` — idempotent teardown; subsequent calls reject with `WC_BINDABLE_DISPOSED`
 - `reconnect(transport)` — attach a fresh transport after the previous one closed
 
-Failures reject with a normative `WC_BINDABLE_*` error code registry — `WC_BINDABLE_TIMEOUT`, `WC_BINDABLE_ABORTED`, `WC_BINDABLE_REMOTE_THROW`, `WC_BINDABLE_TERMINAL_FAILURE`, `WC_BINDABLE_PROTOCOL_ERROR`, and so on — so callers can branch on transport-vs-application failures without parsing messages. The wire format is property-centric JSON only (no `NaN` / `Infinity` / cycles / symbols), validated deeply on both ends before serialization, with FIFO ordering and a default 1 MiB per-envelope cap. Because the proxy is a standard `EventTarget`, every framework adapter works without modification.
+Failures reject with a normative `WC_BINDABLE_*` error code registry — `WC_BINDABLE_TIMEOUT`, `WC_BINDABLE_ABORTED`, `WC_BINDABLE_REMOTE_THROW`, `WC_BINDABLE_TERMINAL_FAILURE`, `WC_BINDABLE_PROTOCOL_ERROR`, and so on — so callers can branch on transport-vs-application failures without parsing messages. The wire format is property-centric JSON only (no `NaN` / `Infinity` / cycles / symbols), validated deeply on both ends before serialization, with FIFO ordering and a default 1 MiB per-envelope cap. Since `@wc-bindable/remote` 0.10.0 the validation is strict rather than reshaping: an `undefined`-valued field, a `Date`, or a class instance (an `Error` included) is rejected with `WC_BINDABLE_INVALID_JSON_VALUE` before it is sent, and a property value of that kind is dropped with a warning. A Core that may run behind the wire therefore publishes plain JSON values, errors included. Because the proxy is a standard `EventTarget`, every framework adapter works without modification.
 
 This means the three boundaries that CSBC crosses — runtime, framework, and now network — are all handled transparently by the same protocol:
 
@@ -474,9 +474,9 @@ The pattern works best in organizations already willing to draw team boundaries 
 
 ### Virtually Eliminated OSS Dependency Risk
 
-Because the protocol *kernel* is extremely small — `@wc-bindable/core` is ~325 lines, and a framework adapter is a few dozen (React ~16, Vue ~19) — the typical OSS dependency risk ("what if the community stops maintaining it?") is low for the kernel: it can be forked, read, fixed, and maintained, and an internal company fork is entirely manageable.
+Because the protocol *kernel* is extremely small — `@wc-bindable/core` is ~560 lines, and a framework adapter is a few dozen (React ~22, Vue ~23; published `dist`, v0.10.0) — the typical OSS dependency risk ("what if the community stops maintaining it?") is low for the kernel: it can be forked, read, fixed, and maintained, and an internal company fork is entirely manageable.
 
-This claim should be scoped honestly, though. Cases B and C additionally depend on `@wc-bindable/remote`, which is **not** in the same size class — its `dist` is ~1,500 lines, `RemoteCoreProxy.js` alone ~1,000. The remote layer is still small enough to fork and maintain, but it is an order of magnitude larger than the kernel, so "small enough to read in an afternoon" applies in full only to the kernel and a framework adapter — not to a Case B/C deployment as a whole.
+This claim should be scoped honestly, though. Cases B and C additionally depend on `@wc-bindable/remote`, which is **not** in the same size class — its `dist` is ~2,000 lines (~2,500 with the bundled WebSocket transports), `RemoteCoreProxy.js` alone ~1,100. The remote layer is still small enough to fork and maintain, but it is several times larger than the kernel (roughly 3.5×), so "small enough to read in an afternoon" applies in full only to the kernel and a framework adapter — not to a Case B/C deployment as a whole.
 
 **Known limitation: a single-author origin.** Honesty requires stating the other side of "small enough to fork": today the protocol, the CSBC concept, this document, and all eight reference packages originate from a single author. The fork-and-maintain argument is what makes that *survivable* rather than disqualifying — there is no large community to lose because there is none to begin with — but the network-effect safety of a mainstream framework is genuinely absent here. This is acceptable under the positioning of this work as a **reference-architecture demonstration** rather than a bid for broad third-party adoption; a team considering it for production should weigh the single-maintainer reality explicitly, exactly as it would any small but load-bearing dependency.
 
@@ -517,7 +517,7 @@ A zero-dependency protocol design relying solely on Web standards, adapters that
 
 ### Reference implementations
 
-The claims in this document are backed by published, runnable reference packages — exhibited here as evidence. This is a *demonstration* of the architecture, not an invitation to depend on a single-author package set (see [Virtually Eliminated OSS Dependency Risk](#virtually-eliminated-oss-dependency-risk)). Repositories live under the `github.com/csbc-dev` organization; versions are early (0.x) and do not all pin the same `@wc-bindable/core` release (see the version note at the top of this document).
+The claims in this document are backed by published, runnable reference packages — exhibited here as evidence. This is a *demonstration* of the architecture, not an invitation to depend on a single-author package set (see [Virtually Eliminated OSS Dependency Risk](#virtually-eliminated-oss-dependency-risk)). Repositories live under the `github.com/csbc-dev` organization; versions are early (0.x), and every package that depends on `@wc-bindable/core` declares `^0.10.0` (see the version note at the top of this document).
 
 | Package | Case | Role of the Shell |
 |---------|------|-------------------|

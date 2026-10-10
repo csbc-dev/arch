@@ -120,4 +120,4 @@
 ## 4. 運用上の注意
 
 - 新パッケージを1つ追加するたびに、[`../scripts/check-integrity.mjs`](../scripts/check-integrity.mjs) のパッケージ一覧と README の実装カタログ表(Reference implementations 節)の更新が必要。
-- バージョン収束(ROADMAP P0-5 フォローアップ)が未完のまま追加すると世代混在がさらに広がるため、**新規実装は最新の `@wc-bindable/core ^0.8.0` に揃えて開始する**こと。
+- 既存実装は `@wc-bindable/core ^0.10.0` に収束済み(ROADMAP P0-5 フォローアップ、2026-10)。世代混在を再発させないよう、**新規実装も `^0.10.0` で開始する**こと。0.10 の remote は JsonValue を厳格に検証するため、Core が公開する値(エラーを含む)は最初から plain な JSON 値で設計する。
